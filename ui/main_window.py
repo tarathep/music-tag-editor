@@ -4,7 +4,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox,
     QListWidget, QListWidgetItem, QFrame, QAbstractItemView, QCheckBox, QProgressDialog,
-    QTreeView, QFileSystemModel, QSplitter
+    QTreeView, QFileSystemModel, QSplitter, QScrollArea, QSizePolicy
 )
 from PySide6.QtGui import QPixmap, QAction
 from PySide6.QtCore import Qt, QDir, QThreadPool
@@ -21,7 +21,8 @@ class MusicTagEditor(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Music Tag Editor")
-        self.setGeometry(100, 200, 1000, 700)
+        self.resize(1360, 860)
+        self.setMinimumSize(1080, 700)
 
         # State variables
         self.current_file_path = None
@@ -33,6 +34,7 @@ class MusicTagEditor(QMainWindow):
         self._create_menu_bar()
         self._create_widgets()
         self._create_layouts()
+        self._apply_theme()
 
         self.statusBar().showMessage("Ready. Select a root directory for the browser.")
 
@@ -42,8 +44,24 @@ class MusicTagEditor(QMainWindow):
             self,
             "About Music Tag Editor",
             "<h2>Music Tag Editor</h2>"
-            "<p>Version 1.0.0 build 20251013</p>"
-            "<p>This application allows you to edit the metadata of your music files.</p>"
+            "<p><b>Version 1.0.0 build 20251013</b></p>"
+            "<p>Edit metadata, album artwork, and filenames for MP3, FLAC, and M4A music files.</p>"
+            "<hr>"
+            "<h3>How to use</h3>"
+            "<ol>"
+            "<li>Click <b>Choose Music Folder</b> and select your music library.</li>"
+            "<li>Choose a folder, then select one or more tracks.</li>"
+            "<li>Edit the metadata fields or change the album artwork.</li>"
+            "<li>Review your changes and click <b>Save Tags</b>.</li>"
+            "</ol>"
+            "<p><b>More tools</b></p>"
+            "<ul>"
+            "<li><b>Fetch Data:</b> suggest metadata using Gemini AI.</li>"
+            "<li><b>File Naming:</b> rename tracks or folders from tag patterns.</li>"
+            "<li><b>Audio Conversion:</b> convert FLAC and ALAC using FFmpeg.</li>"
+            "</ul>"
+            "<p><i>Tip: Keep backups before editing or converting multiple files.</i></p>"
+            "<hr>"
             "<p>Copyright ©2025 Bokie Tarathep. All rights reserved.</p>"
         )
 
@@ -86,16 +104,27 @@ class MusicTagEditor(QMainWindow):
         for i in range(1, 4): self.dir_tree.hideColumn(i)
         self.dir_tree.clicked.connect(self._on_directory_clicked)
 
+        self.open_folder_button = QPushButton("Choose Music Folder")
+        self.open_folder_button.setObjectName("primaryButton")
+        self.open_folder_button.clicked.connect(self.open_directory)
+        self.library_path_label = QLabel("No folder selected")
+        self.library_path_label.setObjectName("mutedLabel")
+        self.library_path_label.setWordWrap(True)
+
         # --- File List ---
         self.file_list_widget = QListWidget()
         self.file_list_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_list_widget.itemSelectionChanged.connect(self.on_selection_changed)
+        self.file_count_label = QLabel("0 tracks")
+        self.file_count_label.setObjectName("countLabel")
 
         # --- Album Art and Tools ---
         self.album_art_label = QLabel("Select a directory to start.")
         self.album_art_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.album_art_label.setFixedSize(300, 300)
-        self.album_art_label.setStyleSheet("border: 1px solid gray; background-color: #f0f0f0;")
+        self.album_art_label.setMinimumSize(220, 220)
+        self.album_art_label.setMaximumSize(300, 300)
+        self.album_art_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.album_art_label.setObjectName("albumArt")
         self.change_art_button = QPushButton("Change Album Art")
         self.change_art_button.clicked.connect(self.change_album_art)
 
@@ -143,65 +172,92 @@ class MusicTagEditor(QMainWindow):
 
         # --- Save Button ---
         self.save_button = QPushButton("Save Tags")
-        self.save_button.setMinimumHeight(60)
+        self.save_button.setObjectName("saveButton")
+        self.save_button.setMinimumHeight(48)
         self.save_button.clicked.connect(self.save_tags)
 
     def _create_layouts(self):
-        # --- Left Pane (Directory and File lists) ---
-        file_list_container = QWidget()
-        file_list_layout = QVBoxLayout(file_list_container)
+        # Library pane
+        library_panel = QFrame()
+        library_panel.setObjectName("panel")
+        library_panel.setMinimumWidth(270)
+        library_panel.setMaximumWidth(390)
+        library_layout = QVBoxLayout(library_panel)
+        library_layout.setContentsMargins(18, 18, 18, 18)
+        library_layout.setSpacing(10)
+        library_layout.addWidget(self._section_label("Music Library", "Browse folders and select tracks"))
+        library_layout.addWidget(self.open_folder_button)
+        library_layout.addWidget(self.library_path_label)
+        library_layout.addWidget(self.dir_tree, 3)
 
-        file_list_layout.setContentsMargins(0, 0, 0, 0)
-        file_list_layout.addWidget(QLabel("WORKSPACE - File(s) Selected"))
-        file_list_layout.addWidget(self.file_list_widget)
+        tracks_header = QHBoxLayout()
+        tracks_header.addWidget(self._section_label("Tracks"))
+        tracks_header.addStretch()
+        tracks_header.addWidget(self.file_count_label)
+        library_layout.addLayout(tracks_header)
+        library_layout.addWidget(self.file_list_widget, 2)
 
-        left_splitter = QSplitter(Qt.Orientation.Vertical)
-        left_splitter.addWidget(self.dir_tree)
-        left_splitter.addWidget(file_list_container)
-        left_splitter.setSizes([250, 400])
-
-        # --- Right Pane (Editor) ---
-        # Art and tools sub-pane
-        art_tools_container = QWidget()
-        art_tools_container.setFixedWidth(320)
-
+        # Artwork and actions pane
+        art_tools_container = QFrame()
+        art_tools_container.setObjectName("panel")
+        art_tools_container.setMinimumWidth(300)
+        art_tools_container.setMaximumWidth(380)
         art_layout = QVBoxLayout(art_tools_container)
-        art_layout.addWidget(QLabel("ALBUM ART COVER"))
+        art_layout.setContentsMargins(18, 18, 18, 18)
+        art_layout.setSpacing(10)
+        art_layout.addWidget(self._section_label("Album Artwork", "Preview or replace the embedded cover"))
         art_layout.addWidget(self.album_art_label, alignment=Qt.AlignmentFlag.AlignCenter)
         art_layout.addWidget(self.change_art_button)
         art_layout.addWidget(self._create_separator())
-        art_layout.addWidget(QLabel("FILE OPERATION"))
-        art_layout.addWidget(QLabel("Rename File Format:"))
+        art_layout.addWidget(self._section_label("File Naming"))
+        art_layout.addWidget(QLabel("File name pattern"))
         art_layout.addWidget(self.rename_format_input)
         art_layout.addWidget(self.rename_button)
-        # art_layout.addWidget(self._create_separator())
-        art_layout.addWidget(QLabel("Rename Directory Format:"))
+        art_layout.addWidget(QLabel("Folder name pattern"))
         art_layout.addWidget(self.rename_dir_format_input)
         art_layout.addWidget(self.rename_dir_button)
         art_layout.addWidget(self._create_separator())
-        art_layout.addWidget(QLabel("LOAD METADATA (Gemini AI)"))
+        art_layout.addWidget(self._section_label("Smart Metadata", "Suggestions powered by Gemini AI"))
         fetch_layout = QHBoxLayout()
         fetch_layout.addWidget(self.fetch_button)
         fetch_layout.addWidget(self.revert_button)
         art_layout.addLayout(fetch_layout)
         art_layout.addWidget(self._create_separator())
-        art_layout.addWidget(QLabel("ARTIST MANAGEMENT"))
-        artist_mgmt_layout = QHBoxLayout()
+        art_layout.addWidget(self._section_label("Artist Names"))
+        artist_mgmt_layout = QVBoxLayout()
+        artist_mgmt_layout.setSpacing(8)
         artist_mgmt_layout.addWidget(self.update_artists_button)
         artist_mgmt_layout.addWidget(self.standardize_artists_button)
         art_layout.addLayout(artist_mgmt_layout)
         art_layout.addStretch()
 
-        # Fields sub-pane
-        fields_pane_layout = QVBoxLayout()
-        fields_pane_layout.addWidget(QLabel("METADATA EDITABLE"))
+        art_scroll = QScrollArea()
+        art_scroll.setObjectName("panelScroll")
+        art_scroll.setWidgetResizable(True)
+        art_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        art_scroll.setWidget(art_tools_container)
+
+        # Metadata pane
+        fields_container = QFrame()
+        fields_container.setObjectName("panel")
+        fields_container.setMinimumWidth(390)
+        fields_pane_layout = QVBoxLayout(fields_container)
+        fields_pane_layout.setContentsMargins(20, 18, 20, 18)
+        fields_pane_layout.setSpacing(12)
+        fields_pane_layout.addWidget(self._section_label("Track Metadata", "Edit values, then save them to the selected files"))
         self.editable_fields_layout = QGridLayout()
+        self.editable_fields_layout.setHorizontalSpacing(14)
+        self.editable_fields_layout.setVerticalSpacing(10)
+        self.editable_fields_layout.setColumnStretch(1, 1)
         for i, (key, widget) in enumerate(self.tag_fields.items()):
             label_text = key.replace("albumartist", "album artist").capitalize()
             self.editable_fields_layout.addWidget(QLabel(f"{label_text}:"), i, 0)
             self.editable_fields_layout.addWidget(widget, i, 1)
 
         self.info_fields_layout = QGridLayout()
+        self.info_fields_layout.setHorizontalSpacing(18)
+        self.info_fields_layout.setVerticalSpacing(8)
+        self.info_fields_layout.setColumnStretch(1, 1)
         for i, (key, widget) in enumerate(self.info_labels.items()):
             label_text = key.replace("samplerate", "sample rate").replace("filesize", "file size").capitalize()
             self.info_fields_layout.addWidget(QLabel(f"{label_text}:"), i, 0)
@@ -209,32 +265,92 @@ class MusicTagEditor(QMainWindow):
 
         fields_pane_layout.addLayout(self.editable_fields_layout)
         fields_pane_layout.addWidget(self._create_separator())
-        fields_pane_layout.addWidget(QLabel("TRACK INFORMATION"))
+        fields_pane_layout.addWidget(self._section_label("Audio Details"))
         fields_pane_layout.addLayout(self.info_fields_layout)
-
-        # --- THIS IS THE CORRECTED SECTION ---
-        # The Tools are now added here, after the file info and before the stretch.
         fields_pane_layout.addWidget(self._create_separator())
-        fields_pane_layout.addWidget(QLabel("FILE CONVERTER\n Support external using ffmpeg\n for Apple Lossless"))
+        fields_pane_layout.addWidget(self._section_label("Audio Conversion", "Convert between FLAC and Apple Lossless using FFmpeg"))
         fields_pane_layout.addWidget(self.convert_button)
         fields_pane_layout.addWidget(self.backup_checkbox)
-        # --- END OF CORRECTION ---
-
         fields_pane_layout.addStretch()
-        fields_pane_layout.addWidget(self.save_button)
 
-        editor_pane_layout = QHBoxLayout()
-        editor_pane_layout.addWidget(art_tools_container)
-        editor_pane_layout.addLayout(fields_pane_layout)
+        fields_scroll = QScrollArea()
+        fields_scroll.setObjectName("panelScroll")
+        fields_scroll.setWidgetResizable(True)
+        fields_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        fields_scroll.setWidget(fields_container)
 
-        # --- Main Layout ---
-        main_layout = QHBoxLayout()
-        main_layout.addWidget(left_splitter, 1)
-        main_layout.addLayout(editor_pane_layout, 2)
+        metadata_pane = QWidget()
+        metadata_layout = QVBoxLayout(metadata_pane)
+        metadata_layout.setContentsMargins(0, 0, 0, 0)
+        metadata_layout.setSpacing(10)
+        metadata_layout.addWidget(fields_scroll, 1)
+        metadata_layout.addWidget(self.save_button)
+
+        main_splitter = QSplitter(Qt.Orientation.Horizontal)
+        main_splitter.setObjectName("mainSplitter")
+        main_splitter.addWidget(library_panel)
+        main_splitter.addWidget(art_scroll)
+        main_splitter.addWidget(metadata_pane)
+        main_splitter.setSizes([300, 340, 560])
+        main_splitter.setStretchFactor(0, 0)
+        main_splitter.setStretchFactor(1, 0)
+        main_splitter.setStretchFactor(2, 1)
 
         central_widget = QWidget()
-        central_widget.setLayout(main_layout)
+        main_layout = QHBoxLayout(central_widget)
+        main_layout.setContentsMargins(14, 14, 14, 14)
+        main_layout.addWidget(main_splitter)
         self.setCentralWidget(central_widget)
+
+    def _section_label(self, title, subtitle=None):
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        heading = QLabel(title)
+        heading.setObjectName("sectionTitle")
+        layout.addWidget(heading)
+        if subtitle:
+            detail = QLabel(subtitle)
+            detail.setObjectName("mutedLabel")
+            detail.setWordWrap(True)
+            layout.addWidget(detail)
+        return container
+
+    def _apply_theme(self):
+        self.setStyleSheet("""
+            QMainWindow, QWidget { background: #f5f3fa; color: #27223a; font-size: 14px; }
+            QFrame#panel { background: #ffffff; border: 1px solid #ddd8e9; border-radius: 12px; }
+            QScrollArea#panelScroll, QScrollArea#panelScroll > QWidget > QWidget { background: transparent; }
+            QLabel#sectionTitle { font-size: 17px; font-weight: 700; color: #31294f; }
+            QLabel#mutedLabel { color: #756d89; font-size: 12px; }
+            QLabel#countLabel { color: #44366f; background: #ece7f7; border-radius: 9px; padding: 3px 8px; font-size: 11px; font-weight: 600; }
+            QLabel#albumArt { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f2eff9, stop:1 #e9e3f4); border: 1px dashed #afa5c8; border-radius: 10px; color: #716889; padding: 12px; }
+            QLineEdit { background: #ffffff; border: 1px solid #cec8dc; border-radius: 7px; padding: 8px 10px; min-height: 20px; selection-color: #ffffff; selection-background-color: #43366d; }
+            QLineEdit:hover { border-color: #a99fc1; }
+            QLineEdit:focus { border: 2px solid #493b75; padding: 7px 9px; }
+            QLineEdit:disabled { background: #f1eff5; color: #958da5; }
+            QPushButton { color: #332b4d; background: #faf9fc; border: 1px solid #cec8dc; border-radius: 7px; padding: 8px 12px; font-weight: 600; }
+            QPushButton:hover { color: #3f3268; background: #eee9f7; border-color: #a99fc1; }
+            QPushButton:pressed { background: #e2dbef; }
+            QPushButton:disabled { color: #aaa4b5; background: #f3f1f6; border-color: #e3dfea; }
+            QPushButton#primaryButton, QPushButton#saveButton { color: white; background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #493d78, stop:1 #382e5f); border-color: #3f346a; }
+            QPushButton#primaryButton:hover, QPushButton#saveButton:hover { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #57478d, stop:1 #433670); border-color: #493b75; }
+            QPushButton#primaryButton:pressed, QPushButton#saveButton:pressed { background: #30274f; }
+            QTreeView, QListWidget { background: #fcfbfd; border: 1px solid #dfdae9; border-radius: 8px; padding: 4px; outline: none; }
+            QTreeView::item, QListWidget::item { min-height: 28px; border-radius: 5px; padding: 2px 5px; }
+            QTreeView::item:hover, QListWidget::item:hover { background: #f0ecf7; }
+            QTreeView::item:selected, QListWidget::item:selected { color: #35275f; background: #e4dcf3; }
+            QCheckBox { spacing: 8px; }
+            QCheckBox::indicator:checked { background: #463970; border: 1px solid #463970; }
+            QFrame[frameShape="4"] { color: #e2ddea; }
+            QSplitter#mainSplitter::handle { background: transparent; width: 8px; }
+            QScrollBar:vertical { background: transparent; width: 10px; margin: 2px; }
+            QScrollBar::handle:vertical { background: #c5bed3; border-radius: 4px; min-height: 28px; }
+            QScrollBar::handle:vertical:hover { background: #a99fc0; }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
+            QStatusBar { background: #ffffff; border-top: 1px solid #ddd8e9; color: #685f79; }
+        """)
 
     def _create_separator(self):
         separator = QFrame()
@@ -257,6 +373,8 @@ class MusicTagEditor(QMainWindow):
     def _populate_file_list(self, path):
         """Populates the file list with supported audio files."""
         self.current_directory = path
+        self.library_path_label.setText(path)
+        self.library_path_label.setToolTip(path)
         self.file_list_widget.clear()
         self.clear_editor_fields()
         supported = ('.mp3', '.flac', '.m4a')
@@ -267,14 +385,22 @@ class MusicTagEditor(QMainWindow):
                     item = QListWidgetItem(filename)
                     item.setData(Qt.ItemDataRole.UserRole, full_path)
                     self.file_list_widget.addItem(item)
+            count = self.file_list_widget.count()
+            self.file_count_label.setText(f"{count} track{'s' if count != 1 else ''}")
             self.statusBar().showMessage(f"Loaded directory: {path}")
         except OSError as e:
+            self.file_count_label.setText("0 tracks")
             self.statusBar().showMessage(f"Cannot access directory: {e}")
 
     def on_selection_changed(self):
         """Handles changes in the file list selection."""
         selected_items = self.file_list_widget.selectedItems()
         num_selected = len(selected_items)
+        total = self.file_list_widget.count()
+        if num_selected:
+            self.file_count_label.setText(f"{num_selected} of {total} selected")
+        else:
+            self.file_count_label.setText(f"{total} track{'s' if total != 1 else ''}")
 
         self.fetch_button.setEnabled(num_selected == 1)
         self.revert_button.setEnabled(False)
