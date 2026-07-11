@@ -73,6 +73,8 @@ class MusicTagEditor(QMainWindow):
             "<p><i>Tip: Keep backups before editing or converting multiple files.</i></p>"
             "<hr>"
             "<p><b>License:</b> GNU General Public License v3.0</p>"
+            "<p><b>Contact:</b> bokie.tarathep@gmail.com</p>"
+            "<p><b>Github:</b> github.com/tarathep/music-tag-editor</p>"
             "<p>Copyright ©2026 Bokie Tarathep. All rights reserved.</p>"
         )
 

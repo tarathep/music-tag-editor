@@ -283,6 +283,8 @@ Copyright © 2026 Bokie Tarathep. All rights reserved.
 
 Music Tag Editor is free software licensed under the **GNU General Public License v3.0**. You may use, study, modify, and redistribute it under the terms in [LICENSE](LICENSE). This software is provided without warranty, as described by the license.
 
+Contact: [bokie.tarathep@gmail.com](mailto:bokie.tarathep@gmail.com)
+
 - [GNU GPL version 3](https://www.gnu.org/licenses/gpl-3.0.html)
 - [GPL-3.0 license reference requested for this project](https://github.com/tarathep/SagaECO?tab=GPL-3.0-1-ov-file#)
 
