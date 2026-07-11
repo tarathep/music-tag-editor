@@ -273,6 +273,126 @@ python -m PyInstaller --clean --noconfirm "Music Tag Editor.spec"
 
 Always run PyInstaller through the activated project environment as shown above. This prevents a globally installed or unrelated virtual-environment copy of PyInstaller from producing a bundle with missing dependencies. The specification bundles the project's `ffmpeg` binary and explicitly collects the dotenv and OS-keyring modules. PyInstaller creates intermediate files under `build/` and places the distributable application under `dist/`.
 
+## Export a Windows application
+
+> **Requirement**: You must run PyInstaller **on Windows**. PyInstaller cannot cross-compile — a macOS machine cannot produce a `.exe`, and a Windows machine cannot produce a `.app`.
+
+### Prerequisites (Windows)
+
+- Python 3.10 or newer for Windows — [python.org](https://www.python.org/downloads/windows/)
+- `ffmpeg.exe` placed in the project root — download the GPL build from [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) or [GitHub](https://github.com/BtbN/FFmpeg-Builds/releases) and copy `bin\ffmpeg.exe` into the project folder
+- `icon.ico` — already included in the repository
+
+### Build steps (run in PowerShell or Command Prompt on Windows)
+
+```powershell
+# 1. Create and activate the virtual environment
+python -m venv .venv
+.venv\Scripts\Activate.ps1
+
+# 2. Install dependencies
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+# 3. Build the .exe using the Windows spec file
+python -m PyInstaller --clean --noconfirm "Music Tag Editor-windows.spec"
+
+# 4. Run the finished executable
+."dist\Music Tag Editor\Music Tag Editor.exe"
+```
+
+The distributable folder is placed at:
+
+```text
+dist\Music Tag Editor\Music Tag Editor.exe
+```
+
+You can zip that entire `dist\Music Tag Editor\` folder and distribute it to Windows users.
+
+### Version and copyright in the .exe
+
+Version and copyright metadata are embedded via [`version_info.txt`](version_info.txt) and appear in **File Properties → Details** on Windows. To update them, edit the `StringStruct` entries in `version_info.txt` and rebuild.
+
+### Build without bundled FFmpeg (Windows)
+
+If you prefer users to install FFmpeg themselves, remove the `binaries` line from `Music Tag Editor-windows.spec` and rebuild:
+
+```powershell
+python -m PyInstaller `
+    --windowed `
+    --onedir `
+    --name="Music Tag Editor" `
+    --icon="icon.ico" `
+    --version-file="version_info.txt" `
+    main.py
+```
+
+## Export an Ubuntu / Linux binary
+
+> **Requirement**: You must run PyInstaller **on Linux**. PyInstaller cannot cross-compile — build each platform natively.
+
+### Prerequisites (Ubuntu)
+
+Install system dependencies first:
+
+```bash
+sudo apt update
+sudo apt install -y python3 python3-venv python3-pip ffmpeg \
+    libxcb-cursor0 libxcb1 libxkbcommon-x11-0 \
+    libglib2.0-0 libdbus-1-3
+```
+
+> The `libxcb-*` and `libxkbcommon-x11-0` packages are required at runtime by PySide6/Qt on Linux. Install them on the target machine as well, or bundle them (see below).
+
+### Build steps (run on Ubuntu)
+
+```bash
+# 1. Clone the repository and enter the directory
+git clone https://github.com/tarathep/music-tag-editor.git
+cd music-tag-editor
+
+# 2. Create and activate the virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# 3. Install dependencies
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+
+# 4. Copy the system ffmpeg binary into the project root
+cp $(which ffmpeg) ./ffmpeg
+chmod +x ffmpeg
+
+# 5. Build the single-file binary using the Linux spec file
+python -m PyInstaller --clean --noconfirm "Music Tag Editor-linux.spec"
+
+# 6. Run the finished binary
+./dist/music-tag-editor
+```
+
+The distributable binary is placed at:
+
+```text
+dist/music-tag-editor
+```
+
+Copy or distribute that single file. Users still need the Qt runtime libraries listed in Prerequisites above; install them with `apt` on the target machine.
+
+### Build without bundled FFmpeg (Linux)
+
+If you prefer users to install FFmpeg from their package manager:
+
+```bash
+source .venv/bin/activate
+python -m PyInstaller \
+    --onefile \
+    --windowed \
+    --name="music-tag-editor" \
+    main.py
+```
+
+Users must have `ffmpeg` installed and available on `PATH`.
+
 ## Important
 
 Tag editing, renaming, and conversion modify files on disk. Keep backups of important music files, especially before using bulk operations.
