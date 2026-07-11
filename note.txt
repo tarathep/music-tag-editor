@@ -1,0 +1,5 @@
+build for mac
+
+pyinstaller --windowed --name="Music Tag Editor" --icon="icon.icns" main.py
+
+pyinstaller --windowed --name="Music Tag Editor" --icon="icon.icns" --add-binary="ffmpeg:." main.py
