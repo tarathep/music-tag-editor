@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QListWidget, QListWidgetItem, QFrame, QAbstractItemView, QCheckBox, QProgressDialog,
     QTreeView, QFileSystemModel, QSplitter, QScrollArea
 )
-from PySide6.QtGui import QPixmap, QAction, QImage
+from PySide6.QtGui import QPixmap, QAction, QImage, QKeySequence
 from PySide6.QtCore import Qt, QDir, QThreadPool
 
 # App-specific imports
@@ -42,7 +42,7 @@ class MusicTagEditor(QMainWindow):
         self._create_layouts()
         self._apply_theme()
 
-        self.statusBar().showMessage("Ready. Select a root directory for the browser.")
+        self.statusBar().showMessage("Ready — choose a music folder to begin.")
 
     def show_about_dialog(self):
         """Displays the application's About box."""
@@ -62,7 +62,7 @@ class MusicTagEditor(QMainWindow):
             "</ol>"
             "<p><b>More tools</b></p>"
             "<ul>"
-            "<li><b>Fetch Data:</b> suggest metadata using Gemini AI.</li>"
+            "<li><b>Fetch Smart Metadata:</b> suggest metadata using Gemini AI.</li>"
             "<li><b>File Naming:</b> rename tracks or folders from tag patterns.</li>"
             "<li><b>Audio Conversion:</b> convert FLAC and ALAC using FFmpeg.</li>"
             "</ul>"
@@ -77,9 +77,17 @@ class MusicTagEditor(QMainWindow):
         # --- File Menu ---
         file_menu = menu_bar.addMenu("&File")
 
-        open_action = QAction("&Set Browser Root...", self)
+        open_action = QAction("&Open Music Folder…", self)
+        open_action.setShortcut(QKeySequence.StandardKey.Open)
         open_action.triggered.connect(self.open_directory)
         file_menu.addAction(open_action)
+
+        file_menu.addSeparator()
+
+        save_action = QAction("&Save Tags", self)
+        save_action.setShortcut(QKeySequence.StandardKey.Save)
+        save_action.triggered.connect(self.save_tags)
+        file_menu.addAction(save_action)
 
         file_menu.addSeparator()
 
@@ -88,6 +96,20 @@ class MusicTagEditor(QMainWindow):
         exit_action.setMenuRole(QAction.MenuRole.QuitRole)
         exit_action.triggered.connect(self.close)
         file_menu.addAction(exit_action)
+
+        edit_menu = menu_bar.addMenu("&Edit")
+        revert_action = QAction("&Revert Unsaved Changes", self)
+        revert_action.setShortcut(QKeySequence.StandardKey.Undo)
+        revert_action.triggered.connect(self.revert_tag_changes)
+        edit_menu.addAction(revert_action)
+
+        tools_menu = menu_bar.addMenu("&Tools")
+        fetch_action = QAction("Fetch &Smart Metadata", self)
+        fetch_action.triggered.connect(self.fetch_metadata_start)
+        tools_menu.addAction(fetch_action)
+        artwork_action = QAction("Change Album &Artwork…", self)
+        artwork_action.triggered.connect(self.change_album_art)
+        tools_menu.addAction(artwork_action)
 
         # --- Help Menu ---
         help_menu = menu_bar.addMenu("&Help")
@@ -109,6 +131,7 @@ class MusicTagEditor(QMainWindow):
         self.dir_tree.setHeaderHidden(True)
         for i in range(1, 4): self.dir_tree.hideColumn(i)
         self.dir_tree.clicked.connect(self._on_directory_clicked)
+        self.dir_tree.setToolTip("Choose a folder to list its MP3, FLAC, and M4A tracks.")
 
         self.open_folder_button = QPushButton("Choose Music Folder")
         self.open_folder_button.setObjectName("primaryButton")
@@ -121,6 +144,7 @@ class MusicTagEditor(QMainWindow):
         self.file_list_widget = QListWidget()
         self.file_list_widget.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.file_list_widget.itemSelectionChanged.connect(self.on_selection_changed)
+        self.file_list_widget.setToolTip("Select one track to edit it, or multiple tracks for bulk editing.")
         self.file_count_label = QLabel("0 tracks")
         self.file_count_label.setObjectName("countLabel")
 
@@ -134,18 +158,22 @@ class MusicTagEditor(QMainWindow):
         self.album_art_info_label.setObjectName("artInfoLabel")
         self.album_art_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.change_art_button = QPushButton("Change Album Art")
+        self.change_art_button.setToolTip("Choose an image from the selected track's folder and prepare a square cover.")
         self.change_art_button.clicked.connect(self.change_album_art)
 
         # --- Renaming ---
         self.rename_format_input = QLineEdit("{track} - {title}")
+        self.rename_format_input.setToolTip("Build filenames with tags such as {track}, {title}, and {artist}.")
         self.rename_button = QPushButton("Rename Selected Files")
         self.rename_button.clicked.connect(self.rename_files)
         self.rename_dir_format_input = QLineEdit("[{quality}] {albumartist} - {album}")
+        self.rename_dir_format_input.setToolTip("Build the folder name with album-level tag placeholders.")
         self.rename_dir_button = QPushButton("Rename Directory")
         self.rename_dir_button.clicked.connect(self.rename_directory)
 
         # --- Online Tools ---
-        self.fetch_button = QPushButton("Fetch Data")
+        self.fetch_button = QPushButton("Fetch Smart Metadata")
+        self.fetch_button.setToolTip("Search Gemini for metadata and keep the results as unsaved drafts.")
         self.fetch_button.clicked.connect(self.fetch_metadata_start)
         self.fetch_button.setEnabled(False)
         self.revert_button = QPushButton("Revert Changes")
@@ -154,9 +182,9 @@ class MusicTagEditor(QMainWindow):
         self.revert_button.setMinimumHeight(48)
 
         # --- Artist Management ---
-        self.update_artists_button = QPushButton("Update Artist Library")
+        self.update_artists_button = QPushButton("Add Names to Artist Library")
         self.update_artists_button.clicked.connect(self.update_artist_library)
-        self.standardize_artists_button = QPushButton("Update Artist Name")
+        self.standardize_artists_button = QPushButton("Standardize Artist Names")
         self.standardize_artists_button.clicked.connect(self.standardize_artist_names)
 
         # --- Tag Fields ---
@@ -170,6 +198,16 @@ class MusicTagEditor(QMainWindow):
             # being mistaken for user changes.
             field.textChanged.connect(self._on_tag_edited)
             self.tag_fields[tag_name.lower().replace(" ", "")] = field
+        self.tag_fields["title"].setPlaceholderText("Track title")
+        self.tag_fields["artist"].setPlaceholderText("Primary track artist")
+        self.tag_fields["album"].setPlaceholderText("Album or release title")
+        self.tag_fields["albumartist"].setPlaceholderText("Primary album artist")
+        self.tag_fields["composer"].setPlaceholderText("Composer or songwriter")
+        self.tag_fields["genre"].setPlaceholderText("Genre")
+        self.tag_fields["year"].setPlaceholderText("YYYY")
+        self.tag_fields["track"].setPlaceholderText("Track number")
+        self.tag_fields["disc"].setPlaceholderText("Disc number")
+        self.tag_fields["comment"].setPlaceholderText("Notes or metadata source URLs")
 
         # --- Info Labels ---
         self.info_labels = {}
@@ -178,10 +216,10 @@ class MusicTagEditor(QMainWindow):
             self.info_labels[info_name.lower().replace(" ", "")] = QLabel("---")
 
         # --- Conversion Tools ---
-        self.convert_button = QPushButton("Convert FLAC <-> ALAC")
+        self.convert_button = QPushButton("Convert Selected FLAC ↔ ALAC")
         self.convert_button.clicked.connect(self.convert_files)
         self.convert_button.setEnabled(False)
-        self.backup_checkbox = QCheckBox("Backup original file before converting")
+        self.backup_checkbox = QCheckBox("Keep original files in a backup folder")
         self.backup_checkbox.setChecked(True)
 
         # --- Save Button ---
@@ -224,18 +262,19 @@ class MusicTagEditor(QMainWindow):
         art_layout.addWidget(self.album_art_info_label)
         art_layout.addWidget(self.change_art_button)
         art_layout.addWidget(self._create_separator())
-        art_layout.addWidget(self._section_label("File Naming"))
-        art_layout.addWidget(QLabel("File name pattern"))
+        art_layout.addWidget(self._section_label("File Naming", "Rename from the selected tracks' saved tags"))
+        art_layout.addWidget(self._field_label("File name pattern"))
         art_layout.addWidget(self.rename_format_input)
         art_layout.addWidget(self.rename_button)
-        art_layout.addWidget(QLabel("Folder name pattern"))
+        art_layout.addSpacing(4)
+        art_layout.addWidget(self._field_label("Folder name pattern"))
         art_layout.addWidget(self.rename_dir_format_input)
         art_layout.addWidget(self.rename_dir_button)
         art_layout.addWidget(self._create_separator())
         art_layout.addWidget(self._section_label("Smart Metadata", "Suggestions powered by Gemini AI"))
         art_layout.addWidget(self.fetch_button)
         art_layout.addWidget(self._create_separator())
-        art_layout.addWidget(self._section_label("Artist Names"))
+        art_layout.addWidget(self._section_label("Artist Names", "Build and apply consistent artist naming"))
         artist_mgmt_layout = QVBoxLayout()
         artist_mgmt_layout.setSpacing(8)
         artist_mgmt_layout.addWidget(self.update_artists_button)
@@ -260,19 +299,32 @@ class MusicTagEditor(QMainWindow):
         self.editable_fields_layout = QGridLayout()
         self.editable_fields_layout.setHorizontalSpacing(14)
         self.editable_fields_layout.setVerticalSpacing(10)
+        self.editable_fields_layout.setContentsMargins(8, 4, 0, 4)
+        self.editable_fields_layout.setColumnMinimumWidth(0, 100)
         self.editable_fields_layout.setColumnStretch(1, 1)
+        tag_labels = {
+            "title": "Title", "artist": "Artist", "album": "Album",
+            "albumartist": "Album Artist", "composer": "Composer", "genre": "Genre",
+            "year": "Year", "track": "Track Number", "disc": "Disc Number", "comment": "Comment",
+        }
         for i, (key, widget) in enumerate(self.tag_fields.items()):
-            label_text = key.replace("albumartist", "album artist").capitalize()
-            self.editable_fields_layout.addWidget(QLabel(f"{label_text}:"), i, 0)
+            label = self._field_label(f"{tag_labels[key]}:", form=True)
+            self.editable_fields_layout.addWidget(label, i, 0)
             self.editable_fields_layout.addWidget(widget, i, 1)
 
         self.info_fields_layout = QGridLayout()
         self.info_fields_layout.setHorizontalSpacing(18)
         self.info_fields_layout.setVerticalSpacing(8)
+        self.info_fields_layout.setContentsMargins(8, 2, 0, 4)
+        self.info_fields_layout.setColumnMinimumWidth(0, 100)
         self.info_fields_layout.setColumnStretch(1, 1)
+        info_names = {
+            "quality": "Quality", "duration": "Duration", "format": "Format",
+            "bitrate": "Bitrate", "samplerate": "Sample Rate", "filesize": "File Size",
+        }
         for i, (key, widget) in enumerate(self.info_labels.items()):
-            label_text = key.replace("samplerate", "sample rate").replace("filesize", "file size").capitalize()
-            self.info_fields_layout.addWidget(QLabel(f"{label_text}:"), i, 0)
+            label = self._field_label(f"{info_names[key]}:", form=True)
+            self.info_fields_layout.addWidget(label, i, 0)
             self.info_fields_layout.addWidget(widget, i, 1)
 
         fields_pane_layout.addLayout(self.editable_fields_layout)
@@ -333,6 +385,13 @@ class MusicTagEditor(QMainWindow):
             layout.addWidget(detail)
         return container
 
+    def _field_label(self, text, form=False):
+        label = QLabel(text)
+        label.setObjectName("formLabel" if form else "fieldLabel")
+        if form:
+            label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        return label
+
     def _apply_theme(self):
         self.setStyleSheet("""
             QMainWindow, QWidget { background: #f5f3fa; color: #27223a; font-size: 14px; }
@@ -340,6 +399,8 @@ class MusicTagEditor(QMainWindow):
             QScrollArea#panelScroll, QScrollArea#panelScroll > QWidget > QWidget { background: transparent; }
             QLabel#sectionTitle { font-size: 17px; font-weight: 700; color: #31294f; }
             QLabel#mutedLabel { color: #756d89; font-size: 12px; }
+            QLabel#fieldLabel { color: #514866; font-size: 12px; font-weight: 600; }
+            QLabel#formLabel { color: #4d455f; font-size: 13px; font-weight: 600; padding-right: 3px; }
             QLabel#countLabel { color: #44366f; background: #ece7f7; border-radius: 9px; padding: 3px 8px; font-size: 11px; font-weight: 600; }
             QLabel#albumArt { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f2eff9, stop:1 #e9e3f4); border: 1px dashed #afa5c8; border-radius: 10px; color: #716889; padding: 0px; }
             QLabel#artInfoLabel { color: #685f79; background: #eee9f7; border-radius: 8px; padding: 5px 9px; font-size: 11px; font-weight: 600; }
@@ -367,6 +428,13 @@ class MusicTagEditor(QMainWindow):
             QScrollBar::handle:vertical:hover { background: #a99fc0; }
             QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; }
             QStatusBar { background: #ffffff; border-top: 1px solid #ddd8e9; color: #685f79; }
+            QMenuBar { background: #ffffff; color: #302947; border-bottom: 1px solid #e1ddea; padding: 2px 6px; }
+            QMenuBar::item { background: transparent; border-radius: 5px; padding: 5px 9px; }
+            QMenuBar::item:selected { background: #ece7f7; }
+            QMenu { background: #ffffff; color: #302947; border: 1px solid #d9d3e5; padding: 5px; }
+            QMenu::item { border-radius: 5px; padding: 7px 28px 7px 10px; }
+            QMenu::item:selected { background: #e8e1f4; color: #35275f; }
+            QMenu::separator { background: #e6e1ec; height: 1px; margin: 5px 8px; }
         """)
 
     def _create_separator(self):
