@@ -96,15 +96,75 @@ Required keys: title, artist, album, albumartist, composer, genre, year, track, 
 
 
 def fetch_metadata_batch(tracks):
-    """Fetch Gemini metadata for multiple tracks without failing the whole batch."""
+    """Fetch metadata for all selected tracks in a single Gemini API request."""
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    grounding_tool = types.Tool(google_search=types.GoogleSearch())
+    config = types.GenerateContentConfig(tools=[grounding_tool], temperature=0.1)
+
+    request_tracks = []
+    tracks_by_id = {}
+    for index, track in enumerate(tracks, start=1):
+        request_id = str(index)
+        context = track.get("context") or {}
+        request_tracks.append({
+            "request_id": request_id,
+            "title": track["title"],
+            "artist": track["artist"],
+            "existing_album": context.get("album", ""),
+            "existing_year": context.get("year", ""),
+            "filename": context.get("filename", ""),
+        })
+        tracks_by_id[request_id] = track
+
+    prompt = f"""
+You are matching multiple audio files to authoritative music releases. Research every input track in this single request. Accuracy is more important than filling every field.
+
+## Input tracks
+{json.dumps(request_tracks, ensure_ascii=False)}
+
+## Match criteria for every track
+1. Keep each request_id unchanged so every result maps to the correct input file.
+2. Treat title and primary artist as identity anchors. Allow harmless punctuation, capitalization, transliteration, and featured-artist variations.
+3. Do not confuse studio, live, acoustic, remix, radio edit, remaster, instrumental, karaoke, or cover recordings. Version qualifiers must agree with the input title, album, or filename.
+4. Identify one specific release containing the recording. Album, year, track, and disc must all refer to that same release; never combine fields from different releases.
+5. Prefer official artist/label pages, MusicBrainz, Discogs, Bandcamp, Apple Music, Spotify, or other established catalogs. Cross-check identity and release facts with at least two sources when possible.
+6. Use the earliest year for the identified release edition and only its four-digit year. Use a conservative genre, and leave fields empty when reliable sources disagree.
+7. Do not copy metadata between tracks merely because they appear to be from the same album. Verify every recording independently.
+8. Return one result for every input request_id, in the same order. Lower match_confidence when the exact recording or release is ambiguous.
+
+## Output
+Return only one compact JSON object with a `tracks` array. Each array item must contain exactly these keys:
+request_id, title, artist, album, albumartist, composer, genre, year, track, disc, comment, match_confidence, match_reason.
+
+Use empty strings for unknown values. Track and disc must contain only their number for the chosen release. `comment` must contain up to three source URLs separated by spaces. `match_confidence` must be a number from 0.0 to 1.0, and `match_reason` must be one short sentence.
+"""
+
+    response = client.models.generate_content(
+        model="gemini-2.5-flash",
+        contents=prompt,
+        config=config,
+    )
+    json_text = response.text.strip().replace("```json", "").replace("```", "")
+    payload = json.loads(json_text)
+    returned_tracks = payload.get("tracks", []) if isinstance(payload, dict) else []
+
     results = []
     errors = []
-
-    for track in tracks:
+    returned_ids = set()
+    for metadata in returned_tracks:
+        request_id = str(metadata.get("request_id", ""))
+        track = tracks_by_id.get(request_id)
+        if not track or request_id in returned_ids:
+            continue
+        returned_ids.add(request_id)
         try:
-            metadata = fetch_metadata_from_api(track["title"], track["artist"], track.get("context"))
+            _validate_match(metadata, track["title"], track["artist"])
             results.append({"path": track["path"], "metadata": metadata})
         except Exception as exc:
             errors.append({"path": track["path"], "error": str(exc)})
+
+    for request_id, track in tracks_by_id.items():
+        if request_id not in returned_ids:
+            errors.append({"path": track["path"], "error": "Gemini did not return a result for this track."})
 
     return {"batch": True, "results": results, "errors": errors}
