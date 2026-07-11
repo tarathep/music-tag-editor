@@ -3,7 +3,7 @@ import datetime
 import mutagen
 from mutagen.flac import FLAC, Picture
 from mutagen.mp3 import MP3
-from mutagen.id3 import APIC
+from mutagen.id3 import APIC, COMM
 from mutagen.mp4 import MP4, MP4Cover
 
 
@@ -53,6 +53,11 @@ def load_file_data(file_path):
         if audio_full.tags:
             tags['composer'] = audio_full.tags.get('\xa9wrt', [['']])[0]
             tags['albumartist'] = audio_full.tags.get('aART', [['']])[0]
+    elif file_path.lower().endswith('.mp3'):
+        audio_full = MP3(file_path)
+        comments = audio_full.tags.getall('COMM') if audio_full.tags else []
+        if comments:
+            tags['comment'] = str(comments[0])
 
     info = {
         'quality': get_file_quality(file_path),
@@ -91,7 +96,10 @@ def save_file_tags(file_path, tags, new_art_path=None):
     if 'year' in tags: audio['date'] = tags['year']
     if 'track' in tags: audio['tracknumber'] = tags['track']
     if 'disc' in tags: audio['discnumber'] = tags['disc']
-    if 'comment' in tags: audio['comment'] = tags['comment']
+    # EasyID3 does not support the special COMM frame. MP3 comments are
+    # handled with the full ID3 interface after the easy tags are saved.
+    if 'comment' in tags and not file_path.lower().endswith('.mp3'):
+        audio['comment'] = tags['comment']
 
     # For M4A, composer and albumartist are not reliably saved by Easy...
     if not file_path.lower().endswith('.m4a'):
@@ -99,6 +107,15 @@ def save_file_tags(file_path, tags, new_art_path=None):
         if 'composer' in tags: audio['composer'] = tags['composer']
 
     audio.save()
+
+    if file_path.lower().endswith('.mp3') and 'comment' in tags:
+        audio_full = MP3(file_path)
+        if audio_full.tags is None:
+            audio_full.add_tags()
+        audio_full.tags.delall('COMM')
+        if tags['comment']:
+            audio_full.tags.add(COMM(encoding=3, lang='eng', desc='', text=[tags['comment']]))
+        audio_full.save()
 
     # Surgical fix for M4A composer and albumartist tags
     if file_path.lower().endswith('.m4a'):

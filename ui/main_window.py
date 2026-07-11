@@ -31,6 +31,10 @@ class MusicTagEditor(QMainWindow):
         self.staged_art_temp_path = None
         self.current_directory = None
         self.original_tags = {}
+        self.tag_drafts = {}
+        self.active_selection_count = 0
+        self.multi_edit_fields = set()
+        self.loading_editor = False
         self.threadpool = QThreadPool()
 
         self._create_menu_bar()
@@ -147,6 +151,7 @@ class MusicTagEditor(QMainWindow):
         self.revert_button = QPushButton("Revert Changes")
         self.revert_button.clicked.connect(self.revert_tag_changes)
         self.revert_button.setEnabled(False)
+        self.revert_button.setMinimumHeight(48)
 
         # --- Artist Management ---
         self.update_artists_button = QPushButton("Update Artist Library")
@@ -159,7 +164,12 @@ class MusicTagEditor(QMainWindow):
         tags_to_edit = ["Title", "Artist", "Album", "Album Artist", "Composer",
                         "Genre", "Year", "Track", "Disc", "Comment"]
         for tag_name in tags_to_edit:
-            self.tag_fields[tag_name.lower().replace(" ", "")] = QLineEdit()
+            field = QLineEdit()
+            # textChanged also captures values inserted by Smart Metadata and
+            # artist standardization. loading_editor prevents disk reloads from
+            # being mistaken for user changes.
+            field.textChanged.connect(self._on_tag_edited)
+            self.tag_fields[tag_name.lower().replace(" ", "")] = field
 
         # --- Info Labels ---
         self.info_labels = {}
@@ -223,10 +233,7 @@ class MusicTagEditor(QMainWindow):
         art_layout.addWidget(self.rename_dir_button)
         art_layout.addWidget(self._create_separator())
         art_layout.addWidget(self._section_label("Smart Metadata", "Suggestions powered by Gemini AI"))
-        fetch_layout = QHBoxLayout()
-        fetch_layout.addWidget(self.fetch_button)
-        fetch_layout.addWidget(self.revert_button)
-        art_layout.addLayout(fetch_layout)
+        art_layout.addWidget(self.fetch_button)
         art_layout.addWidget(self._create_separator())
         art_layout.addWidget(self._section_label("Artist Names"))
         artist_mgmt_layout = QVBoxLayout()
@@ -289,7 +296,11 @@ class MusicTagEditor(QMainWindow):
         metadata_layout.setContentsMargins(0, 0, 0, 0)
         metadata_layout.setSpacing(10)
         metadata_layout.addWidget(fields_scroll, 1)
-        metadata_layout.addWidget(self.save_button)
+        save_actions_layout = QHBoxLayout()
+        save_actions_layout.setSpacing(10)
+        save_actions_layout.addWidget(self.revert_button, 1)
+        save_actions_layout.addWidget(self.save_button, 2)
+        metadata_layout.addLayout(save_actions_layout)
 
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
         main_splitter.setObjectName("mainSplitter")
@@ -400,6 +411,7 @@ class MusicTagEditor(QMainWindow):
 
     def on_selection_changed(self):
         """Handles changes in the file list selection."""
+        self._store_current_draft()
         selected_items = self.file_list_widget.selectedItems()
         num_selected = len(selected_items)
         total = self.file_list_widget.count()
@@ -412,6 +424,7 @@ class MusicTagEditor(QMainWindow):
         self.revert_button.setEnabled(False)
 
         if num_selected == 0:
+            self.active_selection_count = 0
             self.current_file_path = None
             self.clear_editor_fields()
             self.convert_button.setEnabled(False)
@@ -427,18 +440,54 @@ class MusicTagEditor(QMainWindow):
 
         if num_selected > 1:
             self.statusBar().showMessage(f"{num_selected} files selected. Editing common tags.")
-            for key, field in self.tag_fields.items():
-                is_disabled = key in ['title', 'track']
-                field.setText("<Multiple Values>" if is_disabled else field.text())
-                field.setEnabled(not is_disabled)
+            self._configure_multi_selection(selected_items)
             for label in self.info_labels.values():
                 label.setText("---")
         else:
+            self.multi_edit_fields.clear()
             for field in self.tag_fields.values():
                 field.setEnabled(True)
+        self.active_selection_count = num_selected
+
+    def _configure_multi_selection(self, selected_items):
+        """Show true common/mixed values and prepare fields for explicit bulk edits."""
+        all_tags = []
+        has_drafts = False
+        for item in selected_items:
+            path = item.data(Qt.ItemDataRole.UserRole)
+            if path in self.tag_drafts:
+                has_drafts = True
+                all_tags.append(self.tag_drafts[path])
+                continue
+            try:
+                all_tags.append(tag_manager.load_file_data(path)["tags"])
+            except Exception:
+                all_tags.append({})
+
+        self.loading_editor = True
+        self.multi_edit_fields.clear()
+        for key, field in self.tag_fields.items():
+            values = [str(tags.get(key, "")) for tags in all_tags]
+            common_value = values[0] if values and all(value == values[0] for value in values) else None
+            field.setPlaceholderText("")
+
+            if key in ("title", "track"):
+                field.setEnabled(False)
+                field.setText(common_value if common_value is not None else "<Multiple Values>")
+            else:
+                field.setEnabled(True)
+                if common_value is None:
+                    field.clear()
+                    field.setPlaceholderText("Multiple values — type to replace all")
+                else:
+                    field.setText(common_value)
+        self.loading_editor = False
+        self.revert_button.setEnabled(has_drafts)
 
     def clear_editor_fields(self, clear_path=True):
         """Clears all input fields and labels in the editor pane."""
+        was_loading = self.loading_editor
+        self.loading_editor = True
         for field in self.tag_fields.values(): field.clear()
         for label in self.info_labels.values(): label.setText("---")
         self.album_art_label.setText("Select a file to view its tags.")
@@ -448,17 +497,20 @@ class MusicTagEditor(QMainWindow):
         self.original_tags = {}
         self.revert_button.setEnabled(False)
         if clear_path: self.current_file_path = None
+        self.loading_editor = was_loading
 
     def load_file_to_editor(self):
         """Loads data from the current file path into the UI fields."""
         if not self.current_file_path: return
+        self.loading_editor = True
         try:
             self.clear_editor_fields(clear_path=False)
             data = tag_manager.load_file_data(self.current_file_path)
             if not data: return
 
             self.original_tags = data['tags']
-            for key, value in data['tags'].items():
+            displayed_tags = self.tag_drafts.get(self.current_file_path, data['tags'])
+            for key, value in displayed_tags.items():
                 if key in self.tag_fields:
                     self.tag_fields[key].setText(str(value))
 
@@ -476,15 +528,64 @@ class MusicTagEditor(QMainWindow):
                 )
 
             self.statusBar().showMessage(f"Loaded: {os.path.basename(self.current_file_path)}")
+            self.revert_button.setEnabled(self.current_file_path in self.tag_drafts)
         except Exception as e:
             QMessageBox.critical(self, "Error", f"Could not load file: {e}")
+        finally:
+            self.loading_editor = False
+
+    def _current_field_values(self):
+        return {key: field.text() for key, field in self.tag_fields.items() if field.isEnabled()}
+
+    def _store_current_draft(self):
+        """Keep unsaved single-track edits when the user changes selection."""
+        if self.loading_editor or not self.current_file_path or self.active_selection_count != 1:
+            return
+        values = self._current_field_values()
+        original = {key: str(self.original_tags.get(key, "")) for key in values}
+        if values != original:
+            self.tag_drafts[self.current_file_path] = values
+        else:
+            self.tag_drafts.pop(self.current_file_path, None)
+
+    def _on_tag_edited(self):
+        if self.loading_editor or not self.current_file_path:
+            return
+        if self.active_selection_count > 1:
+            edited_widget = self.sender()
+            for key, field in self.tag_fields.items():
+                if field is edited_widget:
+                    self.multi_edit_fields.add(key)
+                    break
+            self.revert_button.setEnabled(bool(self.multi_edit_fields))
+            self.statusBar().showMessage(
+                f"Bulk edit staged for {self.active_selection_count} selected tracks. Click Save Tags to apply."
+            )
+            return
+        if self.active_selection_count != 1:
+            return
+        self.tag_drafts[self.current_file_path] = self._current_field_values()
+        self.revert_button.setEnabled(True)
+        self.statusBar().showMessage("Unsaved changes are kept while you review other tracks.")
 
     def change_album_art(self):
         """Opens a file dialog to select a new album art image."""
         if not self.file_list_widget.selectedItems():
             QMessageBox.warning(self, "Warning", "Please select one or more files first.")
             return
-        path, _ = QFileDialog.getOpenFileName(self, "Select Album Art", "", "Image Files (*.jpg *.jpeg *.png)")
+        if self.current_file_path:
+            initial_directory = os.path.dirname(self.current_file_path)
+        elif self.current_directory:
+            initial_directory = self.current_directory
+        else:
+            initial_directory = QDir.homePath()
+
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Album Art",
+            initial_directory,
+            "Image Files (*.jpg *.jpeg *.png)",
+        )
         if path:
             source_image = QImage(path)
             if source_image.isNull():
@@ -573,29 +674,51 @@ class MusicTagEditor(QMainWindow):
                                      QMessageBox.StandardButton.No)
         if reply == QMessageBox.StandardButton.No: return
 
-        tags_to_save = {}
-        for key, field in self.tag_fields.items():
-            if field.isEnabled():
-                tags_to_save[key] = field.text()
+        self._store_current_draft()
+        if len(paths) > 1:
+            shared_tags = {key: self.tag_fields[key].text() for key in self.multi_edit_fields}
+        else:
+            shared_tags = self._current_field_values()
 
         progress = QProgressDialog("Saving tags...", "Cancel", 0, len(paths), self)
         progress.setWindowModality(Qt.WindowModality.WindowModal)
         progress.show()
 
         success_count = 0
+        save_errors = []
         for i, path in enumerate(paths):
             if progress.wasCanceled(): break
             progress.setValue(i)
             QApplication.processEvents()
             try:
+                tags_to_save = dict(self.tag_drafts.get(path, {}))
+                tags_to_save.update(shared_tags)
                 tag_manager.save_file_tags(path, tags_to_save, self.new_art_path)
+                self.tag_drafts.pop(path, None)
                 success_count += 1
             except Exception as e:
                 print(f"Failed to save {os.path.basename(path)}: {e}")
+                save_errors.append(f"{os.path.basename(path)}: {e}")
 
         progress.setValue(len(paths))
         self._clear_staged_art()
-        QMessageBox.information(self, "Success", f"Successfully updated {success_count} of {len(paths)} files.")
+        self.multi_edit_fields.clear()
+        self.revert_button.setEnabled(False)
+        if len(paths) == 1 and success_count == 1:
+            self.load_file_to_editor()
+        elif len(paths) > 1:
+            self._configure_multi_selection(self.file_list_widget.selectedItems())
+        if save_errors:
+            error_preview = "\n".join(f"• {error}" for error in save_errors[:5])
+            if len(save_errors) > 5:
+                error_preview += f"\n• …and {len(save_errors) - 5} more"
+            QMessageBox.warning(
+                self,
+                "Save Completed with Errors",
+                f"Updated {success_count} of {len(paths)} files.\n\n{error_preview}",
+            )
+        else:
+            QMessageBox.information(self, "Success", f"Successfully updated {success_count} of {len(paths)} files.")
         self.statusBar().showMessage(f"Successfully updated {success_count} of {len(paths)} files.")
 
     def rename_files(self):
@@ -774,7 +897,7 @@ class MusicTagEditor(QMainWindow):
             for item in selected_items:
                 path = item.data(Qt.ItemDataRole.UserRole)
                 try:
-                    tags = tag_manager.load_file_data(path)["tags"]
+                    tags = self.tag_drafts.get(path) or tag_manager.load_file_data(path)["tags"]
                     title = tags.get("title", "").strip()
                     artist = tags.get("artist", "").strip()
                     if title and artist:
@@ -892,7 +1015,7 @@ class MusicTagEditor(QMainWindow):
         )
         if errors:
             message += f"\n\n{len(errors)} track(s) failed and will not be changed."
-        message += "\n\nApply and save these metadata results?"
+        message += "\n\nKeep these results as unsaved drafts for review?"
 
         reply = QMessageBox.question(
             self, "Review Smart Metadata", message,
@@ -903,33 +1026,25 @@ class MusicTagEditor(QMainWindow):
             self.statusBar().showMessage("Batch metadata results discarded. No files were changed.")
             return
 
-        progress = QProgressDialog("Saving smart metadata...", "Cancel", 0, len(results), self)
-        progress.setWindowModality(Qt.WindowModality.WindowModal)
-        progress.show()
-        success_count = 0
-        for index, result in enumerate(results):
-            if progress.wasCanceled():
-                break
-            progress.setValue(index)
-            QApplication.processEvents()
+        for result in results:
             clean_metadata = {
                 key: (str(value).split("/")[0] if key in ("track", "disc") else str(value))
                 for key, value in result.get("metadata", {}).items()
                 if key in self.tag_fields and value is not None
             }
-            try:
-                tag_manager.save_file_tags(result["path"], clean_metadata)
-                success_count += 1
-            except Exception as exc:
-                print(f"Failed to save smart metadata for {result['path']}: {exc}")
+            self.tag_drafts[result["path"]] = clean_metadata
 
-        progress.setValue(len(results))
-        self.load_file_to_editor()
+        selected_items = self.file_list_widget.selectedItems()
+        if len(selected_items) > 1:
+            self._configure_multi_selection(selected_items)
+        elif self.current_file_path:
+            self.load_file_to_editor()
         QMessageBox.information(
-            self, "Smart Metadata Complete",
-            f"Updated {success_count} of {len(results)} tracks."
+            self, "Smart Metadata Drafts Ready",
+            f"Prepared unsaved metadata drafts for {len(results)} tracks. Review them and click Save Tags when ready."
         )
-        self.statusBar().showMessage(f"Smart metadata updated {success_count} tracks.")
+        self.revert_button.setEnabled(True)
+        self.statusBar().showMessage(f"Smart metadata drafts ready for {len(results)} tracks. Nothing has been saved yet.")
 
     def fetch_metadata_error(self, err):
         self.progress.close()
@@ -937,12 +1052,23 @@ class MusicTagEditor(QMainWindow):
         self.statusBar().showMessage("Error fetching metadata.")
 
     def revert_tag_changes(self):
-        if not self.original_tags: return
-        for key, value in self.original_tags.items():
-            if key in self.tag_fields:
-                self.tag_fields[key].setText(str(value))
+        if self.active_selection_count > 1:
+            for item in self.file_list_widget.selectedItems():
+                path = item.data(Qt.ItemDataRole.UserRole)
+                self.tag_drafts.pop(path, None)
+            self.multi_edit_fields.clear()
+            self._configure_multi_selection(self.file_list_widget.selectedItems())
+            self.statusBar().showMessage("Bulk edits and Smart Metadata drafts reverted. No files were changed.")
+            return
+        if not self.original_tags or not self.current_file_path:
+            return
+        self.tag_drafts.pop(self.current_file_path, None)
+        self.loading_editor = True
+        for key, field in self.tag_fields.items():
+            field.setText(str(self.original_tags.get(key, "")))
+        self.loading_editor = False
         self.revert_button.setEnabled(False)
-        self.statusBar().showMessage("Changes reverted.")
+        self.statusBar().showMessage("Unsaved changes reverted to the last saved tags.")
 
     def update_artist_library(self):
         if not self.current_directory: return QMessageBox.warning(self, "Warning", "Please open a directory first.")
