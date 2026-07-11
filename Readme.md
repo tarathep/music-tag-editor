@@ -50,6 +50,20 @@ ffmpeg -version
 
 Gemini is optional. The editor works without it, but the metadata-fetching feature will be disabled.
 
+### Configure securely inside the app
+
+Open **Tools > Configure Gemini API Key...**, or select **Configure Gemini API Key...** under Smart Metadata. Paste the key and choose **Save Securely**.
+
+The app stores the credential using the operating system's protected credential store:
+
+- macOS: Keychain
+- Windows: Credential Manager
+- Linux: the available system keyring backend
+
+The saved key is masked and is never displayed again by the application. You can remove it from the same dialog.
+
+### Environment or `.env` configuration
+
 Copy the example environment file:
 
 ```bash
@@ -69,6 +83,8 @@ GEMINI_API_KEY=your_gemini_api_key_here
 ```
 
 You can create a key in [Google AI Studio](https://aistudio.google.com/app/apikey). The `.env` file is ignored by Git and should not be committed.
+
+`GEMINI_API_KEY` from the operating-system environment or `.env` takes precedence over a key saved in the credential store.
 
 ## Run the project
 

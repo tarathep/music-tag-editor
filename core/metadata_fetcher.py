@@ -3,7 +3,7 @@ import re
 from difflib import SequenceMatcher
 from google import genai
 from google.genai import types
-from config import GEMINI_API_KEY
+from config import get_gemini_api_key
 
 
 def _normalize_identity(value):
@@ -41,7 +41,7 @@ def fetch_metadata_from_api(title, artist, context=None):
     """
     # This function runs in a background thread
     try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
+        client = genai.Client(api_key=get_gemini_api_key())
 
         grounding_tool = types.Tool(
             google_search=types.GoogleSearch()
@@ -97,7 +97,7 @@ Required keys: title, artist, album, albumartist, composer, genre, year, track, 
 
 def fetch_metadata_batch(tracks):
     """Fetch metadata for all selected tracks in a single Gemini API request."""
-    client = genai.Client(api_key=GEMINI_API_KEY)
+    client = genai.Client(api_key=get_gemini_api_key())
     grounding_tool = types.Tool(google_search=types.GoogleSearch())
     config = types.GenerateContentConfig(tools=[grounding_tool], temperature=0.1)
 

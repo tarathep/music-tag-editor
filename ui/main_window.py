@@ -5,13 +5,17 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox,
     QListWidget, QListWidgetItem, QFrame, QAbstractItemView, QCheckBox, QProgressDialog,
-    QTreeView, QFileSystemModel, QSplitter, QScrollArea
+    QTreeView, QFileSystemModel, QSplitter, QScrollArea, QDialog, QDialogButtonBox,
+    QFormLayout
 )
 from PySide6.QtGui import QPixmap, QAction, QImage, QKeySequence
 from PySide6.QtCore import Qt, QDir, QThreadPool
 
 # App-specific imports
-from config import GEMINI_API_KEY
+from config import (
+    delete_gemini_api_key, get_gemini_api_key, get_gemini_key_source,
+    save_gemini_api_key,
+)
 from utils.workers import Worker
 from core import tag_manager, file_operations, metadata_fetcher, artist_manager
 
@@ -107,6 +111,10 @@ class MusicTagEditor(QMainWindow):
         fetch_action = QAction("Fetch &Smart Metadata", self)
         fetch_action.triggered.connect(self.fetch_metadata_start)
         tools_menu.addAction(fetch_action)
+        api_key_action = QAction("Configure Gemini API &Key…", self)
+        api_key_action.triggered.connect(self.show_gemini_key_dialog)
+        tools_menu.addAction(api_key_action)
+        tools_menu.addSeparator()
         artwork_action = QAction("Change Album &Artwork…", self)
         artwork_action.triggered.connect(self.change_album_art)
         tools_menu.addAction(artwork_action)
@@ -176,6 +184,9 @@ class MusicTagEditor(QMainWindow):
         self.fetch_button.setToolTip("Search Gemini for metadata and keep the results as unsaved drafts.")
         self.fetch_button.clicked.connect(self.fetch_metadata_start)
         self.fetch_button.setEnabled(False)
+        self.configure_api_button = QPushButton("Configure Gemini API Key…")
+        self.configure_api_button.setToolTip("Securely store the key in macOS Keychain or Windows Credential Manager.")
+        self.configure_api_button.clicked.connect(self.show_gemini_key_dialog)
         self.revert_button = QPushButton("Revert Changes")
         self.revert_button.clicked.connect(self.revert_tag_changes)
         self.revert_button.setEnabled(False)
@@ -273,6 +284,7 @@ class MusicTagEditor(QMainWindow):
         art_layout.addWidget(self._create_separator())
         art_layout.addWidget(self._section_label("Smart Metadata", "Suggestions powered by Gemini AI"))
         art_layout.addWidget(self.fetch_button)
+        art_layout.addWidget(self.configure_api_button)
         art_layout.addWidget(self._create_separator())
         art_layout.addWidget(self._section_label("Artist Names", "Build and apply consistent artist naming"))
         artist_mgmt_layout = QVBoxLayout()
@@ -391,6 +403,83 @@ class MusicTagEditor(QMainWindow):
         if form:
             label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         return label
+
+    def show_gemini_key_dialog(self):
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Gemini API Key")
+        dialog.setMinimumWidth(520)
+
+        layout = QVBoxLayout(dialog)
+        layout.setContentsMargins(22, 20, 22, 20)
+        layout.setSpacing(14)
+        layout.addWidget(self._section_label(
+            "Gemini API Key",
+            "Stored securely in macOS Keychain or Windows Credential Manager. The key is never displayed after saving.",
+        ))
+
+        source = get_gemini_key_source()
+        if source == "environment":
+            status_text = "Active source: GEMINI_API_KEY from the operating-system environment"
+        elif source == "keyring":
+            status_text = "Active source: secure operating-system credential store"
+        else:
+            status_text = "No Gemini API key is currently configured"
+
+        status_label = QLabel(status_text)
+        status_label.setObjectName("credentialStatus")
+        status_label.setWordWrap(True)
+        layout.addWidget(status_label)
+
+        form = QFormLayout()
+        form.setHorizontalSpacing(14)
+        key_input = QLineEdit()
+        key_input.setEchoMode(QLineEdit.EchoMode.Password)
+        key_input.setClearButtonEnabled(True)
+        key_input.setPlaceholderText("Paste a new Gemini API key")
+        form.addRow(self._field_label("API Key:", form=True), key_input)
+        layout.addLayout(form)
+
+        help_label = QLabel(
+            "Environment priority: if GEMINI_API_KEY is defined by the operating system or .env, "
+            "it overrides the credential-store value. Remove that environment variable and restart "
+            "the app to use the saved credential instead."
+        )
+        help_label.setObjectName("mutedLabel")
+        help_label.setWordWrap(True)
+        layout.addWidget(help_label)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Cancel)
+        remove_button = buttons.addButton("Remove Saved Key", QDialogButtonBox.ButtonRole.DestructiveRole)
+        save_button = buttons.addButton("Save Securely", QDialogButtonBox.ButtonRole.AcceptRole)
+        buttons.rejected.connect(dialog.reject)
+        layout.addWidget(buttons)
+
+        if source == "environment":
+            key_input.setEnabled(False)
+            save_button.setEnabled(False)
+            key_input.setPlaceholderText("Managed by GEMINI_API_KEY environment variable")
+
+        def save_key():
+            try:
+                save_gemini_api_key(key_input.text())
+            except Exception as exc:
+                QMessageBox.critical(dialog, "Could Not Save API Key", str(exc))
+                return
+            QMessageBox.information(dialog, "API Key Saved", "The key was saved in the secure OS credential store.")
+            dialog.accept()
+
+        def remove_key():
+            try:
+                delete_gemini_api_key()
+            except Exception as exc:
+                QMessageBox.critical(dialog, "Could Not Remove API Key", str(exc))
+                return
+            QMessageBox.information(dialog, "API Key Removed", "The saved credential-store key was removed.")
+            dialog.accept()
+
+        save_button.clicked.connect(save_key)
+        remove_button.clicked.connect(remove_key)
+        dialog.exec()
 
     def _apply_theme(self):
         self.setStyleSheet("""
@@ -952,9 +1041,18 @@ class MusicTagEditor(QMainWindow):
         self._populate_file_list(self.current_directory)
 
     def fetch_metadata_start(self):
-        if not GEMINI_API_KEY:
-            return QMessageBox.warning(self, "API Key Missing",
-                                       "Please set GEMINI_API_KEY in the project's .env file to use this feature.")
+        if not get_gemini_api_key():
+            reply = QMessageBox.question(
+                self,
+                "Gemini API Key Required",
+                "No Gemini API key is configured. Open the secure credential settings now?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply == QMessageBox.StandardButton.Yes:
+                self.show_gemini_key_dialog()
+            if not get_gemini_api_key():
+                return
         selected_items = self.file_list_widget.selectedItems()
         if not selected_items:
             return

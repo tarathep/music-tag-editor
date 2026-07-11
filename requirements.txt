@@ -2,4 +2,5 @@ PySide6
 mutagen
 google-genai
 python-dotenv
+keyring
 pyinstaller
