@@ -2,6 +2,8 @@
 
 Music Tag Editor is a desktop application for viewing and editing metadata in MP3, FLAC, and M4A music files. It is built with Python and PySide6.
 
+![alt text](example.png)
+
 Licensed under the [GNU General Public License v3.0](LICENSE).
 
 The application can:
