@@ -2,6 +2,8 @@
 
 Music Tag Editor is a desktop application for viewing and editing metadata in MP3, FLAC, and M4A music files. It is built with Python and PySide6.
 
+Licensed under the [GNU General Public License v3.0](LICENSE).
+
 The application can:
 
 - Edit title, artist, album, album artist, composer, genre, year, track, disc, and comment tags.
@@ -272,3 +274,31 @@ Always run PyInstaller through the activated project environment as shown above.
 ## Important
 
 Tag editing, renaming, and conversion modify files on disk. Keep backups of important music files, especially before using bulk operations.
+
+## License
+
+Copyright © 2026 Bokie Tarathep. All rights reserved.
+
+Music Tag Editor is free software licensed under the **GNU General Public License v3.0**. You may use, study, modify, and redistribute it under the terms in [LICENSE](LICENSE). This software is provided without warranty, as described by the license.
+
+- [GNU GPL version 3](https://www.gnu.org/licenses/gpl-3.0.html)
+- [GPL-3.0 license reference requested for this project](https://github.com/tarathep/SagaECO?tab=GPL-3.0-1-ov-file#)
+
+When distributing a modified version or application bundle, provide the corresponding source code and preserve the GPL and third-party notices required by their respective licenses.
+
+## Third-party libraries
+
+Music Tag Editor is built with the following primary libraries and tools. Each remains governed by its own license.
+
+| Library or tool | Use in this project | License |
+| --- | --- | --- |
+| [Python](https://www.python.org/) | Application runtime | Python Software Foundation License |
+| [PySide6 / Qt for Python](https://doc.qt.io/qtforpython-6/) | Desktop interface and image processing | LGPL-3.0-only, GPL-2.0-only, GPL-3.0-only, or commercial; this GPL project uses it under GPL-3.0 |
+| [Mutagen](https://mutagen.readthedocs.io/) | Reading and writing MP3, FLAC, and M4A metadata and artwork | GPL-2.0-or-later |
+| [Google Gen AI Python SDK](https://github.com/googleapis/python-genai) | Gemini API and Google Search-grounded metadata lookup | Apache-2.0 |
+| [python-dotenv](https://github.com/theskumar/python-dotenv) | Loading local `.env` configuration | BSD-3-Clause |
+| [keyring](https://github.com/jaraco/keyring) | macOS Keychain, Windows Credential Manager, and Linux credential-store access | MIT |
+| [PyInstaller](https://pyinstaller.org/) | Creating standalone desktop application bundles | GPL-2.0-or-later with the PyInstaller bootloader exception |
+| [FFmpeg](https://ffmpeg.org/) | FLAC and ALAC conversion | License depends on build options; the GPL-enabled/version-3 build used by this project is GPL-3.0-or-later |
+
+Application bundles can also include transitive dependencies brought in by these libraries. Distributors should review the bundled packages and retain their copyright and license notices. FFmpeg licensing depends on its exact configure options; do not distribute a binary built with `--enable-nonfree`.
