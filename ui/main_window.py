@@ -1,12 +1,13 @@
 import os
 import shutil
+import tempfile
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QGridLayout, QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox,
     QListWidget, QListWidgetItem, QFrame, QAbstractItemView, QCheckBox, QProgressDialog,
-    QTreeView, QFileSystemModel, QSplitter, QScrollArea, QSizePolicy
+    QTreeView, QFileSystemModel, QSplitter, QScrollArea
 )
-from PySide6.QtGui import QPixmap, QAction
+from PySide6.QtGui import QPixmap, QAction, QImage
 from PySide6.QtCore import Qt, QDir, QThreadPool
 
 # App-specific imports
@@ -27,6 +28,7 @@ class MusicTagEditor(QMainWindow):
         # State variables
         self.current_file_path = None
         self.new_art_path = None
+        self.staged_art_temp_path = None
         self.current_directory = None
         self.original_tags = {}
         self.threadpool = QThreadPool()
@@ -121,10 +123,12 @@ class MusicTagEditor(QMainWindow):
         # --- Album Art and Tools ---
         self.album_art_label = QLabel("Select a directory to start.")
         self.album_art_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.album_art_label.setMinimumSize(220, 220)
-        self.album_art_label.setMaximumSize(300, 300)
-        self.album_art_label.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.album_art_label.setFixedSize(300, 300)
+        self.album_art_label.setScaledContents(False)
         self.album_art_label.setObjectName("albumArt")
+        self.album_art_info_label = QLabel("No artwork selected")
+        self.album_art_info_label.setObjectName("artInfoLabel")
+        self.album_art_info_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.change_art_button = QPushButton("Change Album Art")
         self.change_art_button.clicked.connect(self.change_album_art)
 
@@ -207,6 +211,7 @@ class MusicTagEditor(QMainWindow):
         art_layout.setSpacing(10)
         art_layout.addWidget(self._section_label("Album Artwork", "Preview or replace the embedded cover"))
         art_layout.addWidget(self.album_art_label, alignment=Qt.AlignmentFlag.AlignCenter)
+        art_layout.addWidget(self.album_art_info_label)
         art_layout.addWidget(self.change_art_button)
         art_layout.addWidget(self._create_separator())
         art_layout.addWidget(self._section_label("File Naming"))
@@ -325,7 +330,8 @@ class MusicTagEditor(QMainWindow):
             QLabel#sectionTitle { font-size: 17px; font-weight: 700; color: #31294f; }
             QLabel#mutedLabel { color: #756d89; font-size: 12px; }
             QLabel#countLabel { color: #44366f; background: #ece7f7; border-radius: 9px; padding: 3px 8px; font-size: 11px; font-weight: 600; }
-            QLabel#albumArt { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f2eff9, stop:1 #e9e3f4); border: 1px dashed #afa5c8; border-radius: 10px; color: #716889; padding: 12px; }
+            QLabel#albumArt { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #f2eff9, stop:1 #e9e3f4); border: 1px dashed #afa5c8; border-radius: 10px; color: #716889; padding: 0px; }
+            QLabel#artInfoLabel { color: #685f79; background: #eee9f7; border-radius: 8px; padding: 5px 9px; font-size: 11px; font-weight: 600; }
             QLineEdit { background: #ffffff; border: 1px solid #cec8dc; border-radius: 7px; padding: 8px 10px; min-height: 20px; selection-color: #ffffff; selection-background-color: #43366d; }
             QLineEdit:hover { border-color: #a99fc1; }
             QLineEdit:focus { border: 2px solid #493b75; padding: 7px 9px; }
@@ -413,7 +419,6 @@ class MusicTagEditor(QMainWindow):
 
         first_item = selected_items[0]
         self.current_file_path = first_item.data(Qt.ItemDataRole.UserRole)
-        self.new_art_path = None
         self.load_file_to_editor()
 
         is_all_flac = all(item.text().lower().endswith('.flac') for item in selected_items)
@@ -438,7 +443,8 @@ class MusicTagEditor(QMainWindow):
         for label in self.info_labels.values(): label.setText("---")
         self.album_art_label.setText("Select a file to view its tags.")
         self.album_art_label.setPixmap(QPixmap())
-        self.new_art_path = None
+        self.album_art_info_label.setText("No artwork selected")
+        self._clear_staged_art()
         self.original_tags = {}
         self.revert_button.setEnabled(False)
         if clear_path: self.current_file_path = None
@@ -464,7 +470,10 @@ class MusicTagEditor(QMainWindow):
             if art_data:
                 pixmap = QPixmap()
                 pixmap.loadFromData(art_data)
-                self.album_art_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+                self._show_square_artwork(pixmap)
+                self.album_art_info_label.setText(
+                    f"Embedded • {pixmap.width()} × {pixmap.height()} px • {self._format_bytes(len(art_data))}"
+                )
 
             self.statusBar().showMessage(f"Loaded: {os.path.basename(self.current_file_path)}")
         except Exception as e:
@@ -477,10 +486,81 @@ class MusicTagEditor(QMainWindow):
             return
         path, _ = QFileDialog.getOpenFileName(self, "Select Album Art", "", "Image Files (*.jpg *.jpeg *.png)")
         if path:
-            self.new_art_path = path
-            pixmap = QPixmap(path)
-            self.album_art_label.setPixmap(pixmap.scaled(300, 300, Qt.KeepAspectRatio, Qt.SmoothTransformation))
-            self.statusBar().showMessage("Album art staged to be saved.")
+            source_image = QImage(path)
+            if source_image.isNull():
+                return QMessageBox.warning(self, "Invalid Image", "The selected image could not be loaded.")
+
+            original_width = source_image.width()
+            original_height = source_image.height()
+            side = min(original_width, original_height)
+            square_image = source_image.copy(
+                (original_width - side) // 2,
+                (original_height - side) // 2,
+                side,
+                side,
+            ).scaled(1000, 1000, Qt.AspectRatioMode.IgnoreAspectRatio, Qt.TransformationMode.SmoothTransformation)
+
+            self._clear_staged_art()
+            suffix = ".png" if path.lower().endswith(".png") else ".jpg"
+            temp_file = tempfile.NamedTemporaryFile(prefix="music-tag-art-", suffix=suffix, delete=False)
+            temp_file.close()
+            quality = -1 if suffix == ".png" else 92
+            if not square_image.save(temp_file.name, quality=quality):
+                os.unlink(temp_file.name)
+                return QMessageBox.warning(self, "Image Error", "The square artwork could not be prepared.")
+
+            self.staged_art_temp_path = temp_file.name
+            self.new_art_path = temp_file.name
+            self._show_square_artwork(QPixmap.fromImage(square_image))
+            self.album_art_info_label.setText(
+                f"Original {original_width} × {original_height} px  →  Saved 1000 × 1000 px • "
+                f"{self._format_bytes(os.path.getsize(temp_file.name))}"
+            )
+            self.statusBar().showMessage("Album art center-cropped to 1:1 and staged to be saved.")
+
+    def _show_square_artwork(self, pixmap):
+        """Display the complete centered square artwork without clipping or stretching."""
+        if pixmap.isNull():
+            return
+        side = min(pixmap.width(), pixmap.height())
+        square = pixmap.copy(
+            (pixmap.width() - side) // 2,
+            (pixmap.height() - side) // 2,
+            side,
+            side,
+        )
+        # Leave a small inset for the dashed frame. Scaling to the old hard-coded
+        # 300 px size caused Qt to clip the image inside the label's padded area.
+        preview_side = min(self.album_art_label.width(), self.album_art_label.height()) - 16
+        preview = square.scaled(
+            preview_side,
+            preview_side,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        preview.setDevicePixelRatio(1.0)
+        self.album_art_label.setPixmap(preview)
+
+    def _clear_staged_art(self):
+        if self.staged_art_temp_path and os.path.exists(self.staged_art_temp_path):
+            try:
+                os.unlink(self.staged_art_temp_path)
+            except OSError:
+                pass
+        self.staged_art_temp_path = None
+        self.new_art_path = None
+
+    def closeEvent(self, event):
+        self._clear_staged_art()
+        super().closeEvent(event)
+
+    @staticmethod
+    def _format_bytes(size):
+        if size < 1024:
+            return f"{size} B"
+        if size < 1024 * 1024:
+            return f"{size / 1024:.1f} KB"
+        return f"{size / (1024 * 1024):.1f} MB"
 
     def save_tags(self):
         """Saves the current tags from the UI to all selected files."""
@@ -514,7 +594,7 @@ class MusicTagEditor(QMainWindow):
                 print(f"Failed to save {os.path.basename(path)}: {e}")
 
         progress.setValue(len(paths))
-        self.new_art_path = None
+        self._clear_staged_art()
         QMessageBox.information(self, "Success", f"Successfully updated {success_count} of {len(paths)} files.")
         self.statusBar().showMessage(f"Successfully updated {success_count} of {len(paths)} files.")
 
