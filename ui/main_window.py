@@ -402,7 +402,7 @@ class MusicTagEditor(QMainWindow):
         else:
             self.file_count_label.setText(f"{total} track{'s' if total != 1 else ''}")
 
-        self.fetch_button.setEnabled(num_selected == 1)
+        self.fetch_button.setEnabled(num_selected > 0)
         self.revert_button.setEnabled(False)
 
         if num_selected == 0:
@@ -684,7 +684,67 @@ class MusicTagEditor(QMainWindow):
         if not GEMINI_API_KEY:
             return QMessageBox.warning(self, "API Key Missing",
                                        "Please set GEMINI_API_KEY in the project's .env file to use this feature.")
-        if not self.current_file_path: return
+        selected_items = self.file_list_widget.selectedItems()
+        if not selected_items:
+            return
+
+        if len(selected_items) > 1:
+            tracks = []
+            skipped = []
+            for item in selected_items:
+                path = item.data(Qt.ItemDataRole.UserRole)
+                try:
+                    tags = tag_manager.load_file_data(path)["tags"]
+                    title = tags.get("title", "").strip()
+                    artist = tags.get("artist", "").strip()
+                    if title and artist:
+                        tracks.append({
+                            "path": path,
+                            "title": title,
+                            "artist": artist,
+                            "context": {
+                                "album": tags.get("album", ""),
+                                "year": tags.get("year", ""),
+                                "filename": os.path.basename(path),
+                            },
+                        })
+                    else:
+                        skipped.append(os.path.basename(path))
+                except Exception:
+                    skipped.append(os.path.basename(path))
+
+            if not tracks:
+                return QMessageBox.warning(
+                    self, "Metadata Missing",
+                    "The selected files need existing title and artist tags before Gemini can search for them."
+                )
+
+            message = f"Search Gemini for metadata for {len(tracks)} tracks?"
+            if skipped:
+                message += f"\n\n{len(skipped)} track(s) without a title or artist will be skipped."
+            message += "\n\nYou can review a summary before any tags are saved."
+            reply = QMessageBox.question(
+                self, "Fetch Smart Metadata", message,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                return
+
+            self.progress = QProgressDialog(
+                f"Searching Gemini for {len(tracks)} tracks...", None, 0, 0, self
+            )
+            self.progress.setWindowModality(Qt.WindowModality.WindowModal)
+            self.progress.show()
+
+            worker = Worker(metadata_fetcher.fetch_metadata_batch, tracks)
+            worker.signals.result.connect(self.fetch_metadata_finish)
+            worker.signals.error.connect(self.fetch_metadata_error)
+            self.threadpool.start(worker)
+            return
+
+        if not self.current_file_path:
+            return
 
         title = self.original_tags.get('title', '')
         artist = self.original_tags.get('artist', '')
@@ -695,7 +755,16 @@ class MusicTagEditor(QMainWindow):
         self.progress.setWindowModality(Qt.WindowModality.WindowModal)
         self.progress.show()
 
-        worker = Worker(metadata_fetcher.fetch_metadata_from_api, title, artist)
+        worker = Worker(
+            metadata_fetcher.fetch_metadata_from_api,
+            title,
+            artist,
+            {
+                "album": self.original_tags.get("album", ""),
+                "year": self.original_tags.get("year", ""),
+                "filename": os.path.basename(self.current_file_path),
+            },
+        )
         worker.signals.result.connect(self.fetch_metadata_finish)
         worker.signals.error.connect(self.fetch_metadata_error)
         self.threadpool.start(worker)
@@ -705,13 +774,82 @@ class MusicTagEditor(QMainWindow):
         if not fetched_data:
             return QMessageBox.critical(self, "Error", "Failed to parse metadata from API.")
 
+        if fetched_data.get("batch"):
+            return self._finish_batch_metadata(fetched_data)
+
         for key, value in fetched_data.items():
             if key in self.tag_fields:
-                clean_value = str(value).split('/')[0]
+                clean_value = str(value).split('/')[0] if key in ("track", "disc") else str(value)
                 self.tag_fields[key].setText(clean_value)
 
         self.revert_button.setEnabled(True)
         self.statusBar().showMessage("Metadata fetched. Review and save.")
+
+    def _finish_batch_metadata(self, batch_data):
+        results = batch_data.get("results", [])
+        errors = batch_data.get("errors", [])
+        if not results:
+            return QMessageBox.critical(
+                self, "Metadata Search Failed",
+                f"Gemini could not find metadata for the selected tracks ({len(errors)} failed)."
+            )
+
+        preview_lines = []
+        for result in results[:8]:
+            metadata = result.get("metadata", {})
+            title = metadata.get("title") or os.path.basename(result["path"])
+            artist = metadata.get("artist", "")
+            confidence = float(metadata.get("match_confidence", 0))
+            preview_lines.append(
+                f"• {title}" + (f" — {artist}" if artist else "") + f" ({confidence:.0%} match)"
+            )
+        if len(results) > 8:
+            preview_lines.append(f"• …and {len(results) - 8} more")
+
+        message = (
+            f"Gemini found metadata for {len(results)} track(s).\n\n"
+            + "\n".join(preview_lines)
+        )
+        if errors:
+            message += f"\n\n{len(errors)} track(s) failed and will not be changed."
+        message += "\n\nApply and save these metadata results?"
+
+        reply = QMessageBox.question(
+            self, "Review Smart Metadata", message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No
+        )
+        if reply != QMessageBox.StandardButton.Yes:
+            self.statusBar().showMessage("Batch metadata results discarded. No files were changed.")
+            return
+
+        progress = QProgressDialog("Saving smart metadata...", "Cancel", 0, len(results), self)
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.show()
+        success_count = 0
+        for index, result in enumerate(results):
+            if progress.wasCanceled():
+                break
+            progress.setValue(index)
+            QApplication.processEvents()
+            clean_metadata = {
+                key: (str(value).split("/")[0] if key in ("track", "disc") else str(value))
+                for key, value in result.get("metadata", {}).items()
+                if key in self.tag_fields and value is not None
+            }
+            try:
+                tag_manager.save_file_tags(result["path"], clean_metadata)
+                success_count += 1
+            except Exception as exc:
+                print(f"Failed to save smart metadata for {result['path']}: {exc}")
+
+        progress.setValue(len(results))
+        self.load_file_to_editor()
+        QMessageBox.information(
+            self, "Smart Metadata Complete",
+            f"Updated {success_count} of {len(results)} tracks."
+        )
+        self.statusBar().showMessage(f"Smart metadata updated {success_count} tracks.")
 
     def fetch_metadata_error(self, err):
         self.progress.close()
