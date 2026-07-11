@@ -5,7 +5,7 @@ a = Analysis(
     ['main.py'],
     pathex=[],
     binaries=[('ffmpeg', '.')],
-    datas=[('LICENSE', '.')],
+    datas=[],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
@@ -48,10 +48,4 @@ app = BUNDLE(
     name='Music Tag Editor.app',
     icon='icon.icns',
     bundle_identifier=None,
-    info_plist={
-        'CFBundleShortVersionString': '1.0.0',
-        'CFBundleVersion': '20260712',
-        'CFBundleGetInfoString': 'Music Tag Editor 1.0.0 (Build 20260712)',
-        'NSHumanReadableCopyright': 'Copyright © 2026 Bokie Tarathep. All rights reserved.',
-    },
 )
