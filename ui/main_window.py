@@ -54,7 +54,7 @@ class MusicTagEditor(QMainWindow):
             self,
             "About Music Tag Editor",
             "<h2>Music Tag Editor</h2>"
-            "<p><b>Version 1.0.0 build 20251013</b></p>"
+            "<p><b>Version 1.0.0 Build 20260712</b></p>"
             "<p>Edit metadata, album artwork, and filenames for MP3, FLAC, and M4A music files.</p>"
             "<hr>"
             "<h3>How to use</h3>"
@@ -72,7 +72,7 @@ class MusicTagEditor(QMainWindow):
             "</ul>"
             "<p><i>Tip: Keep backups before editing or converting multiple files.</i></p>"
             "<hr>"
-            "<p>Copyright ©2025 Bokie Tarathep. All rights reserved.</p>"
+            "<p>Copyright ©2026 Bokie Tarathep. All rights reserved.</p>"
         )
 
     def _create_menu_bar(self):

@@ -5,18 +5,22 @@ Music Tag Editor is a desktop application for viewing and editing metadata in MP
 The application can:
 
 - Edit title, artist, album, album artist, composer, genre, year, track, disc, and comment tags.
-- Edit one file or apply shared tags and album art to multiple files.
+- Keep unsaved per-track drafts while reviewing other tracks.
+- Apply only intentionally edited fields to multiple selected files.
 - Display audio information such as quality, duration, format, bitrate, sample rate, and file size.
+- Preview artwork dimensions and file size, and prepare new covers as centered `1000 × 1000` images.
 - Rename files and album directories using tag-based formats.
 - Convert FLAC to ALAC and ALAC to FLAC with FFmpeg.
-- Fetch suggested metadata with Gemini AI and Google Search grounding.
+- Fetch one or many metadata suggestions with Gemini AI and Google Search grounding.
+- Validate Gemini matches by title, artist, recording version, release consistency, sources, and confidence.
+- Store the Gemini API key securely in macOS Keychain or Windows Credential Manager.
 - Maintain a local artist-name library for consistent naming.
 
 ## Requirements
 
 - Python 3.10 or newer
 - FFmpeg available on `PATH` for FLAC/ALAC conversion
-- A Gemini API key if you want to use **Fetch Data**
+- A Gemini API key if you want to use **Fetch Smart Metadata**
 
 ## Setup
 
@@ -62,6 +66,8 @@ The app stores the credential using the operating system's protected credential 
 
 The saved key is masked and is never displayed again by the application. You can remove it from the same dialog.
 
+On macOS, you can inspect the saved item in **Keychain Access** by searching for `Music Tag Editor`. Its account name is `GEMINI_API_KEY`.
+
 ### Environment or `.env` configuration
 
 Copy the example environment file:
@@ -85,6 +91,20 @@ GEMINI_API_KEY=your_gemini_api_key_here
 You can create a key in [Google AI Studio](https://aistudio.google.com/app/apikey). The `.env` file is ignored by Git and should not be committed.
 
 `GEMINI_API_KEY` from the operating-system environment or `.env` takes precedence over a key saved in the credential store.
+
+You can also set it for the current terminal session before launching the app:
+
+```bash
+export GEMINI_API_KEY="your_gemini_api_key_here"
+python main.py
+```
+
+On Windows PowerShell:
+
+```powershell
+$env:GEMINI_API_KEY="your_gemini_api_key_here"
+python main.py
+```
 
 ## Run the project
 
@@ -113,21 +133,58 @@ Useful debugger commands are `n` (next line), `s` (step into), `c` (continue), `
 ## How to use
 
 1. Start the application with `python main.py`.
-2. Select **File > Set Browser Root...** and choose the root of your music library.
+2. Select **Choose Music Folder** or **File > Open Music Folder...** and choose the root of your music library.
 3. Select a directory in the left browser. Supported MP3, FLAC, and M4A files appear below it.
 4. Select one or more audio files to view their current tags and audio details.
 5. Edit the tag fields or choose **Change Album Art**.
 6. Select **Save Tags**, review the confirmation, and save the changes.
 
-When multiple files are selected, shared fields can be applied in bulk. Title and track are disabled to avoid accidentally assigning the same values to every selected file.
+The bottom action bar keeps **Revert Changes** and **Save Tags** available while the metadata panel scrolls.
+
+### Review tracks without losing edits
+
+1. Select one track and edit its metadata.
+2. Select another track without saving the first one.
+3. Return to the first track; its unsaved draft is restored.
+4. Select **Save Tags** to write the selected track's draft.
+5. Select **Revert Changes** to discard that track's draft and reload its saved tags.
+
+Drafts remain in memory only while the application is running.
+
+### Edit multiple tracks
+
+1. Select multiple tracks with `Command` on macOS or `Ctrl` on Windows/Linux. Use `Shift` to select a range.
+2. Fields shared by every selected track display their common value.
+3. Mixed fields display **Multiple values — type to replace all**.
+4. Enter a new value only in fields you want to apply to every selected track.
+5. Select **Save Tags** to apply those intentional bulk changes.
+
+Only fields changed during the multi-selection are applied to all selected tracks. Title and track number remain protected from bulk replacement. **Revert Changes** discards staged bulk edits and Smart Metadata drafts for the selected tracks.
 
 ### Fetch metadata with Gemini
 
-1. Configure `GEMINI_API_KEY` in `.env`.
-2. Select one file that already has a title and artist.
-3. Select **Fetch Data**.
-4. Review the suggested metadata.
-5. Select **Save Tags** to write it, or **Revert Changes** to discard the suggestion.
+1. Configure the key with **Tools > Configure Gemini API Key...**, the Smart Metadata setup button, an OS environment variable, or `.env`.
+2. Select one or more files that already have title and artist tags.
+3. Select **Fetch Smart Metadata**.
+4. Gemini searches all selected tracks in one request and validates each match independently.
+5. Review the title, artist, and confidence summary.
+6. Accept the results to keep them as unsaved per-track drafts. No files are changed yet.
+7. Review individual tracks or make additional bulk edits.
+8. Select **Save Tags** to write the drafts, or **Revert Changes** to discard them.
+
+Files without an existing title or artist are skipped. Ambiguous or low-confidence matches are rejected instead of being silently applied. Source URLs are saved in the Comment tag when the results are accepted and saved.
+
+The free Gemini tier may enforce request or token limits. If the API returns `429 RESOURCE_EXHAUSTED`, wait for the requested retry period or check the project's usage and rate limits in Google AI Studio.
+
+### Change album artwork
+
+1. Select one or more tracks.
+2. Select **Change Album Art**. The picker opens in the selected track's directory.
+3. Choose a JPEG or PNG image.
+4. The app displays the original dimensions and prepares a centered square cover at `1000 × 1000` pixels.
+5. Review the complete 1:1 preview and select **Save Tags** to embed it.
+
+When multiple tracks are selected, the prepared cover is applied to all of them. The original source image is not modified.
 
 ### Rename files and directories
 
@@ -145,8 +202,18 @@ Directory rename formats support `{quality}`, `{albumartist}`, `{album}`, `{genr
 
 1. Make sure FFmpeg is installed and available on `PATH`.
 2. Select only FLAC files or only M4A/ALAC files.
-3. Leave **Backup original file before converting** enabled if you want the originals moved into a `backup` directory.
-4. Select **Convert FLAC <-> ALAC** and confirm.
+3. Leave **Keep original files in a backup folder** enabled if you want the originals moved into a `backup` directory.
+4. Select **Convert Selected FLAC ↔ ALAC** and confirm.
+
+## Menus and shortcuts
+
+- **File > Open Music Folder...** — `Command/Ctrl + O`
+- **File > Save Tags** — `Command/Ctrl + S`
+- **Edit > Revert Unsaved Changes** — `Command/Ctrl + Z`
+- **Tools > Fetch Smart Metadata**
+- **Tools > Configure Gemini API Key...**
+- **Tools > Change Album Artwork...**
+- **Help > About Music Tag Editor** — includes a quick-start guide
 
 ## Export a macOS application
 
@@ -169,7 +236,7 @@ Build the standalone `.app` bundle with PyInstaller from macOS.
 3. Export the application and bundle FFmpeg inside it:
 
    ```bash
-   pyinstaller --windowed --name="Music Tag Editor" --icon="icon.icns" --add-binary="ffmpeg:." main.py
+   python -m PyInstaller --windowed --name="Music Tag Editor" --icon="icon.icns" --add-binary="ffmpeg:." main.py
    ```
 
 4. The exported application will be available at:
@@ -187,7 +254,7 @@ Build the standalone `.app` bundle with PyInstaller from macOS.
 To build the app without bundling FFmpeg, use:
 
 ```bash
-pyinstaller --windowed --name="Music Tag Editor" --icon="icon.icns" main.py
+python -m PyInstaller --windowed --name="Music Tag Editor" --icon="icon.icns" main.py
 ```
 
 That version requires FFmpeg to be installed separately and available on the user's `PATH`.
@@ -197,10 +264,10 @@ That version requires FFmpeg to be installed separately and available on the use
 The included `Music Tag Editor.spec` can also be used:
 
 ```bash
-pyinstaller "Music Tag Editor.spec"
+python -m PyInstaller --clean --noconfirm "Music Tag Editor.spec"
 ```
 
-The specification currently expects Homebrew FFmpeg at `/opt/homebrew/bin/ffmpeg`. Update its `binaries` path if FFmpeg is installed elsewhere. PyInstaller creates intermediate files under `build/` and places the distributable application under `dist/`.
+Always run PyInstaller through the activated project environment as shown above. This prevents a globally installed or unrelated virtual-environment copy of PyInstaller from producing a bundle with missing dependencies. The specification bundles the project's `ffmpeg` binary and explicitly collects the dotenv and OS-keyring modules. PyInstaller creates intermediate files under `build/` and places the distributable application under `dist/`.
 
 ## Important
 
