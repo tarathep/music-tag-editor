@@ -406,7 +406,7 @@ Music Tag Editor is free software licensed under the **GNU General Public Licens
 Contact: [bokie.tarathep@gmail.com](mailto:bokie.tarathep@gmail.com)
 
 - [GNU GPL version 3](https://www.gnu.org/licenses/gpl-3.0.html)
-- [GPL-3.0 license reference requested for this project](https://github.com/tarathep/SagaECO?tab=GPL-3.0-1-ov-file#)
+- [GPL-3.0 license reference requested for this project](https://github.com/tarathep/music-tag-editor?tab=GPL-3.0-1-ov-file#)
 
 When distributing a modified version or application bundle, provide the corresponding source code and preserve the GPL and third-party notices required by their respective licenses.
 
